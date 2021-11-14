@@ -541,6 +541,7 @@ def print_pde(xi, rhs_description, lhs_descr="u_t", verbose=True):
 def TrainSTRidge(
     R,
     Ut,
+    descr,
     lam,
     d_tol,
     maxit=25,
@@ -551,6 +552,7 @@ def TrainSTRidge(
     split=0.8,
     print_best_tol=False,
     add_l2_loss=False,
+    lhs_descr='ut'
 ):
     """
     This function trains a predictor using STRidge.
@@ -562,6 +564,7 @@ def TrainSTRidge(
     not squared 2-norm.
     """
     print("TrainSTRidge: start")
+    start = time.time()
     train_log = {}
     tol_log = []
     err_log = []
@@ -587,7 +590,7 @@ def TrainSTRidge(
         l0_penalty = 0.001 * np.linalg.cond(R)
     print("l0_penalty:", l0_penalty)
     # Get the standard least squares estimator
-    xi= np.zeros((D, 1))
+    xi = np.zeros((D, 1))
     xi_best = np.linalg.lstsq(TrainR, TrainY)[0]
     L_best = np.linalg.norm(
         TestY - TestR.dot(xi_best), 2
@@ -603,16 +606,16 @@ def TrainSTRidge(
     print("Starting STRidge iterations ...")
     for iter in range(maxit):
         # Get a set of coefficients and error
-        xi= STRidge(R, Ut, lam, STR_iters, tol, normalize=normalize)
-        L_curr= np.linalg.norm(
+        xi = STRidge(R, Ut, lam, STR_iters, tol, normalize=normalize)
+        L_curr = np.linalg.norm(
             TestY - TestR.dot(xi), norm_err
         ) + l0_penalty * np.count_nonzero(xi)
 
         if add_l2_loss:
             L_curr += lam * np.linalg.norm(xi)
         # Has the accuracy improved?
-        if L_curr<= L_best:
-            L_best = err
+        if L_curr < L_best:
+            L_best = L_curr
             xi_best = xi
             tol_best = tol
             tol = tol + d_tol
@@ -622,16 +625,18 @@ def TrainSTRidge(
             d_tol = 2 * d_tol / (maxit - iter)
             tol = tol + d_tol
 
-        err_log.append(err)
+        err_log.append(L_curr)
         tol_log.append(tol)
         if print_best_tol:
             print(
-                f"Tol: {tol}, Optimal tolerance: {tol_best}, Error best: {L_best}, l0_pen: {l0_penalty}, xi: {xi}"
+                f"Tol: {tol}, Optimal tolerance: {tol_best}, Obj function best: {L_best}, l0_pen: {l0_penalty}, xi: {xi}"
             )
-    # train_log["err"] = err_log
-    # train_log["tol"] = tol_log
 
     train_log["best_xi"] = xi_best
+    print('Best PDE found with STRidge:')
+    print_pde(xi_best, descr, lhs_descr=lhs_descr)
+    end = time.time()
+    print("Time elapsed (s):", end - start)
     return xi_best, train_log
 
 
@@ -839,7 +844,7 @@ def BruteForceL0(
 ):
     """
     This function uses Brute force search over subsets of all possible 2^M combinations of terms to find the best PDE.
-    
+    We use
     """
     start = time.time()
     # Split data into 80% training and 20% test, then search for the best tolderance.
