@@ -1,9 +1,23 @@
 import numpy as np
 from six.moves import cPickle as pickle
 import matplotlib.colors as colors
-from PDE_search import FiniteDiff, TotalFiniteDiff_t
+from PDE_search import FiniteDiff, TotalFiniteDiff_t, TotalFiniteDiff, TotalFourierDiff
 import operator
 import functools
+
+import matplotlib.pyplot as plt
+import matplotlib.pylab as pylab
+
+# Specifying matplotlib settings
+pylab.rcParams['figure.figsize'] = (5, 4)
+params = {'legend.fontsize': 25,
+         'axes.labelsize': 27,
+         'axes.titlesize': 27,
+         'xtick.labelsize': 20,
+         'ytick.labelsize': 20,
+         'lines.linewidth' : 2.5
+         }
+pylab.rcParams.update(params)
 
 
 def save_dict(di_, filename_):
@@ -17,7 +31,7 @@ def load_dict(filename_):
     return ret_di
 
 
-def scalar_pde_solver(descr, coefs, u0, t, x, bc="periodic", nskip=100, fix_bndry=False, bndry_w=20, bndry_val_l=-0.5, bndry_val_r=0.5):
+def scalar_pde_solver(descr, coefs, u0, t, x, bc="periodic", num_integrator_steps=100, fix_bndry=False, bndry_w=20, bndry_val_l=-0.5, bndry_val_r=0.5):
     """Solver for the first order PDE in form u_t=F(u, u_x, u_xx, ...).
        Assumes scalar complex-valued function u(t,x).
        Builds equation from symbolic description.
@@ -28,12 +42,12 @@ def scalar_pde_solver(descr, coefs, u0, t, x, bc="periodic", nskip=100, fix_bndr
 
        Parameters:
             (complex) coefs -- vector of coefficients multiplying each term in F(.)
-            (int) nskip -- number of additional time steps for PDE solver (per dt step)
+            (int) num_integrator_steps -- number of additional time steps for PDE solver (per dt step)
                            (increases number of steps in vector 't' by a factor 'nskip')
             (complex) u0 -- initial condition for function u(t, x) at t=0
 
     """
-    t = np.linspace(t[0], t[-1], len(t)*nskip)  # Create a refined t-grid
+    t = np.linspace(t[0], t[-1], len(t)*num_integrator_steps)  # Create a refined t-grid
     nt, nx = len(t), len(x)
 
     u_ev = np.zeros((nt, nx), dtype=complex)
@@ -54,7 +68,7 @@ def scalar_pde_solver(descr, coefs, u0, t, x, bc="periodic", nskip=100, fix_bndr
             # Solution exploded, interrupt
             return np.array([np.nan])
 
-    return u_ev[::nskip]
+    return u_ev[::num_integrator_steps]
 
 
 def generalized_euler_solver(descr, coefs, rho0, v0, t, x, bc="periodic", num_integrator_steps=1, fix_vvx_term=True):
@@ -141,7 +155,7 @@ def generalized_euler_solver_jrepr(rhot_descr, rhot_coefs, vt_descr, vt_coefs, r
     return rho_ev, v_ev
 
 
-def get_u_term_from_descr(descr_term, u, x, bc="periodic"):
+def get_u_term_from_descr(descr_term, u, x, bc="periodic", deriv="FD"):
     """Parse a string representing a given term in PDE.
     For simplicity onsider Euler-like system.
     All terms are combinations of rho, v and their derivatives.
@@ -156,7 +170,7 @@ def get_u_term_from_descr(descr_term, u, x, bc="periodic"):
     # Split multipliers according to * sign
     multis = descr_term.split('*')
     collection = []
-    obs_dict = {'u': u, '': np.ones(len(u))}
+    obs_dict = {'u': u, '': np.ones(u.size)}
     dx = x[1] - x[0]
     for m in multis:
         expr = m.split('^')  # check if have a power sign
@@ -173,7 +187,13 @@ def get_u_term_from_descr(descr_term, u, x, bc="periodic"):
             der_d = f[1].count('x')
         if len(f) == 1:
             der_d = 0
-        collection.append(FiniteDiff(obs_dict[obs], dx, der_d, bc=bc)**pow)
+        if deriv == "FD":
+            Du = TotalFiniteDiff(obs_dict[obs], dx, der_d, bc=bc)
+        elif deriv == "poly":
+            Du = PolyDiff(u[0], x, deg=4, diff=der_d)
+        elif deriv == "Fourier":
+            Du = TotalFourierDiff(obs_dict[obs], dx, der_d)
+        collection.append(Du**float(pow))
     term = functools.reduce(operator.mul, collection, 1)
     return term
 

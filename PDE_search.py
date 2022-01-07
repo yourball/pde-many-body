@@ -101,11 +101,14 @@ def FiniteDiff_t(u, dt, d):
 
 def TotalFiniteDiff(u, dx, d, bc="periodic"):
     """Calculate d-th order spatial derivative at all time points"""
-    assert len(u.shape) == 2
-    m, n = u.shape
-    Du = np.zeros((m, n), dtype=u.dtype)
-    for i in range(m):
-        Du[i, :] = FiniteDiff(u[i, :], dx, d, bc=bc)
+
+    if len(u.shape) == 2:
+        m, n = u.shape
+        Du = np.zeros((m, n), dtype=u.dtype)
+        for i in range(m):
+            Du[i, :] = FiniteDiff(u[i, :], dx, d, bc=bc)
+    elif len(u.shape) == 1:
+        Du = FiniteDiff(u, dx, d, bc=bc)
     return Du
 
 
@@ -119,13 +122,24 @@ def TotalFiniteDiff_t(u, dt, d=1, bc=""):
     return Du
 
 
-def TotalFourierDiff(u, dx, d):
-    """Calculate d-th order spatial derivative at all time points"""
+def TotalPolyDiff(u, x, d=1, deg=3, width=5, bc="open"):
     assert len(u.shape) == 2
     m, n = u.shape
-    Du = np.zeros((m, n), dtype=u.dtype)
+    Du = np.zeros((m, n - 2*width), dtype=u.dtype)
     for i in range(m):
-        Du[i, :] = FourierDiff(u[i, :], dx, d)
+        Du[i, :] = PolyDiff(u[i, :], x, deg=deg, diff=d, bc=bc)
+    return Du
+
+
+def TotalFourierDiff(u, dx, d):
+    """Calculate d-th order spatial derivative at all time points"""
+    if len(u.shape) == 2:
+        m, n = u.shape
+        Du = np.zeros((m, n), dtype=u.dtype)
+        for i in range(m):
+            Du[i, :] = FourierDiff(u[i, :], dx, d)
+    elif len(u.shape) == 1:
+        Du = FourierDiff(u, dx, d)
     return Du
 
 
@@ -251,8 +265,7 @@ def build_Theta(
 
     n, d = data.shape
     m, d2 = derivatives.shape
-    if n != m:
-        raise Exception("dimension error")
+
     if data_description is not None:
         if len(data_description) != d:
             raise Exception("data descrption error")
@@ -401,7 +414,7 @@ def build_linear_system(
         rhs_description = description of what each column in R is
     """
 
-    n, m = u.shape
+    m, n = u.shape
 
     if width_x == None:
         width_x = int(n / 10)
@@ -432,22 +445,22 @@ def build_linear_system(
     ########################
     # First take the time derivaitve for the left hand side of the equation
     ########################
-    ut = np.zeros((n2, m2), dtype=np.complex64)
+    ut = np.zeros((m2, n2), dtype=np.complex64)
 
     if time_diff == "poly":
         T = np.linspace(0, (m - 1) * dt, m)
         for i in range(n2):
             ut_real = PolyDiff(
-                u[i + offset_x, :].real, T, diff=1, width=width_t, deg=deg_t
+                u[:, i + offset_x].real, T, diff=1, width=width_t, deg=deg_t
             )
             ut_imag = PolyDiff(
-                u[i + offset_x, :].imag, T, diff=1, width=width_t, deg=deg_t
+                u[:, i + offset_x].imag, T, diff=1, width=width_t, deg=deg_t
             )
-            ut[i, :] = ut_real + 1j * ut_imag
+            ut[:, i] = ut_real + 1j * ut_imag
 
     else:
         for i in range(n2):
-            ut[i, :] = FiniteDiff_t(u[i + offset_x, :], dt, 1)
+            ut[:, i] = FiniteDiff_t(u[:, i + offset_x], dt, 1)
 
     ut = np.reshape(ut, (n2 * m2, 1), order="F")
 
@@ -455,16 +468,16 @@ def build_linear_system(
     # Now form the rhs one column at a time, and record what each one is
     ########################
 
-    u2 = u[offset_x : n - offset_x, offset_t : m - offset_t]
+    u2 = u[offset_t : m - offset_t, offset_x : n - offset_x]
     Theta = np.zeros((n2 * m2, (D + 1) * (P + 1)), dtype=np.complex64)
-    ux = np.zeros((n2, m2), dtype=np.complex64)
+    ux = np.zeros((m2, n2), dtype=np.complex64)
     rhs_description = ["" for i in range((D + 1) * (P + 1))]
 
     if space_diff == "poly":
         Du = {}
         for i in range(m2):
             Du[i] = PolyDiff(
-                u[:, i + offset_t],
+                u[i + offset_t, :],
                 np.linspace(0, (n - 1) * dx, n),
                 diff=D,
                 width=width_x,
@@ -478,13 +491,13 @@ def build_linear_system(
         if d > 0:
             for i in range(m2):
                 if space_diff == "FD":
-                    ux[:, i] = FiniteDiff(u[:, i + offset_t], dx, d)
+                    ux[i, :] = FiniteDiff(u[i + offset_t, :], dx, d)
                 elif space_diff == "poly":
-                    ux[:, i] = Du[i][:, d - 1]
+                    ux[i, :] = Du[i][d - 1, :]
                 elif space_diff == "Fourier":
-                    ux[:, i] = np.fft.ifft(ik ** d * np.fft.fft(ux[:, i]))
+                    ux[i, :] = np.fft.ifft(ik ** d * np.fft.fft(ux[i, :]))
         else:
-            ux = np.ones((n2, m2), dtype=np.complex64)
+            ux = np.ones((m2, n2), dtype=np.complex64)
 
         for p in range(P + 1):
             Theta[:, d * (P + 1) + p] = np.reshape(
@@ -552,7 +565,8 @@ def TrainSTRidge(
     split=0.8,
     print_best_tol=False,
     add_l2_loss=False,
-    lhs_descr='ut'
+    lhs_descr='ut',
+    verbose=False
 ):
     """
     This function trains a predictor using STRidge.
@@ -563,7 +577,8 @@ def TrainSTRidge(
     Please note published article has typo.  Loss function used here for model selection evaluates fidelity using 2-norm,
     not squared 2-norm.
     """
-    print("TrainSTRidge: start")
+    if verbose:
+        print("TrainSTRidge: start")
     start = time.time()
     train_log = {}
     tol_log = []
@@ -571,9 +586,9 @@ def TrainSTRidge(
     # Split data into 80% training and 20% test, then search for the best tolderance.
     np.random.seed(0)  # for consistancy
     n, _ = R.shape
-    print("Selecting random dataset rows for train")
+    if verbose:
+        print("Selecting random dataset rows for train")
     train = np.random.choice(n, int(n * split), replace=False)
-    print("Use remaining data for validation")
     test = np.setdiff1d(np.arange(n), train)
     TrainR = R[train, :]
     TestR = R[test, :]
@@ -582,16 +597,16 @@ def TrainSTRidge(
     D = TrainR.shape[1]
 
     # Set up the initial tolerance and l0 penalty
-    print("Setting up the initial tolerance and l0 penalty ...")
     d_tol = float(d_tol)
     tol = d_tol
 
     if l0_penalty == None:
         l0_penalty = 0.001 * np.linalg.cond(R)
-    print("l0_penalty:", l0_penalty)
+    if verbose:
+        print("l0_penalty:", l0_penalty)
     # Get the standard least squares estimator
     xi = np.zeros((D, 1))
-    xi_best = np.linalg.lstsq(TrainR, TrainY)[0]
+    xi_best = np.linalg.lstsq(TrainR, TrainY, rcond=None)[0]
     L_best = np.linalg.norm(
         TestY - TestR.dot(xi_best), 2
     ) + l0_penalty * np.count_nonzero(xi_best)
@@ -603,7 +618,8 @@ def TrainSTRidge(
     # Hyperparameter search: l0_penalty
     # Now increase tolerance until test performance decreases
     tol_log = []
-    print("Starting STRidge iterations ...")
+    if verbose:
+        print("Starting STRidge iterations ...")
     for iter in range(maxit):
         # Get a set of coefficients and error
         xi = STRidge(R, Ut, lam, STR_iters, tol, normalize=normalize)
@@ -627,16 +643,14 @@ def TrainSTRidge(
 
         err_log.append(L_curr)
         tol_log.append(tol)
-        if print_best_tol:
+        if verbose:
             print(
                 f"Tol: {tol}, Optimal tolerance: {tol_best}, Obj function best: {L_best}, l0_pen: {l0_penalty}, xi: {xi}"
             )
+            print_pde(xi_best, descr, lhs_descr=lhs_descr)
 
     train_log["best_xi"] = xi_best
-    print('Best PDE found with STRidge:')
-    print_pde(xi_best, descr, lhs_descr=lhs_descr)
     end = time.time()
-    print("Time elapsed (s):", end - start)
     return xi_best, train_log
 
 
@@ -743,7 +757,7 @@ def ElasticNet(X0, Y, lam1, lam2, xi=np.array([0]), maxit=100, normalize=2):
     # Now that we have the sparsity pattern, used least squares.
     biginds = np.where(xi!= 0)[0]
     if biginds != []:
-        xi[biginds] = np.linalg.lstsq(X[:, biginds], Y)[0]
+        xi[biginds] = np.linalg.lstsq(X[:, biginds], Y, rcond=None)[0]
 
     # Finally, reverse the regularization so as to be able to use with raw data
     if normalize != 0:
@@ -774,10 +788,10 @@ def STRidge(X0, y, lam, maxit, tol, normalize=2, print_results=False):
 
     # Get the standard ridge esitmate
     if lam != 0:
-        xi_fit = np.linalg.lstsq(X.T.dot(X) + lam * np.eye(d), X.T.dot(y))
+        xi_fit = np.linalg.lstsq(X.T.dot(X) + lam * np.eye(d), X.T.dot(y), rcond=None)
         xi, xi_err = xi_fit[0], xi_fit[1]
     else:
-        xi_fit = np.linalg.lstsq(X, y)
+        xi_fit = np.linalg.lstsq(X, y, rcond=None)
         xi, xi_err = xi_fit[0], xi_fit[1]
     num_relevant = d
     # print(f'abs(xi): {np.abs(xi)}, tol: {tol}')
@@ -816,12 +830,12 @@ def STRidge(X0, y, lam, maxit, tol, normalize=2, print_results=False):
             xi[biginds], _ = xi_fit[0], xi_fit[1]
             # print('w_fit', w_fit)
         else:
-            xi_fit = np.linalg.lstsq(X[:, biginds], y)
+            xi_fit = np.linalg.lstsq(X[:, biginds], y, rcond=None)
             xi[biginds], _ = xi_fit[0], xi_fit[1]
 
     # Now that we have the sparsity pattern, use standard least squares to get w
     if biginds != []:
-        xi_fit = np.linalg.lstsq(X[:, biginds], y)
+        xi_fit = np.linalg.lstsq(X[:, biginds], y, rcond=None)
         xi[biginds], _ = xi_fit[0], xi_fit[1]
 
     if normalize != 0:
@@ -866,7 +880,7 @@ def BruteForceL0(
     if verbose:
         print("Brute Force search with l0_penalty", l0_penalty)
     # Get the standard least squares estimator
-    xi_best = np.linalg.lstsq(X, TrainY)[0]
+    xi_best = np.linalg.lstsq(X, TrainY, rcond=None)[0]
     L_best = np.linalg.norm(
         TestY - TestR.dot(xi_best), 2
     ) + l0_penalty * np.count_nonzero(xi_best)
@@ -889,15 +903,14 @@ def BruteForceL0(
         non_zero_xi = np.count_nonzero(xi)
 
         if lam_l2 != 0:
-            # import pdb; pdb.set_trace()
             xi[list(indexes)] = np.linalg.lstsq(
-                X.T.dot(X) + lam_l2 * np.eye(X.shape[1]), X.T.dot(TrainY)
+                X.T.dot(X) + lam_l2 * np.eye(X.shape[1]), X.T.dot(TrainY), rcond=None
             )[0]
             L_curr = np.linalg.norm(
                 TestY - TestR.dot(xi), 2
             ) + l0_penalty * np.count_nonzero(xi)
         else:
-            xi[list(indexes)] = np.linalg.lstsq(TrainR[:, list(indexes)], TrainY)[0]
+            xi[list(indexes)] = np.linalg.lstsq(TrainR[:, list(indexes)], TrainY, rcond=None)[0]
             L_curr = np.linalg.norm(
                 TestY - TestR.dot(xi), 2
             ) + l0_penalty * np.count_nonzero(xi)
@@ -916,6 +929,8 @@ def BruteForceL0(
             print(
                 f"Obj function {L_curr}, Obj function best: {L_best}, l0_penalty: {l0_penalty}, pde: "
             )
+            print('Best PDE found so far:')
+            print_pde(xi_best, descr, lhs_descr=lhs_descr)
 
     train_log["err_test"] = L_best - l0_penalty * np.count_nonzero(xi_best)
     train_log["err_train"] = np.linalg.norm(TrainY - TrainR.dot(xi_best))
@@ -956,7 +971,7 @@ def STRidgeScan(
     train_data = []
     results = {"l0_arr": l0_arr, "train_data": train_data}
     for l0 in l0_arr:
-        xi_best, train_log = TrainSTRidge(R, Ut, lam_l2, d_tol, l0_penalty=l0)
+        xi_best, train_log = TrainSTRidge(R, Ut, descr, lam_l2, d_tol, l0_penalty=l0, verbose=verbose)
         train_data.append(train_log)
     return results
 
@@ -1015,7 +1030,7 @@ class CEM:
         for j in range(num_rollouts):
             terms = agent.act()
             terms_list.append(terms)
-            xi = np.linalg.lstsq(X[:, terms], ut)[0]
+            xi = np.linalg.lstsq(X[:, terms], ut, rcond=None)[0]
             L_curr= (
                 np.linalg.norm(np.dot(X[:, terms], xi) - ut)
                 + l0_penalty * np.count_nonzero(xi)
@@ -1094,7 +1109,7 @@ class CEM:
                 best_terms = terms.copy()
                 best_loss = loss
             xi = np.zeros((X.shape[1], 1), dtype=np.complex)
-            xi[best_terms] = np.linalg.lstsq(X[:, best_terms], ut)[0]
+            xi[best_terms] = np.linalg.lstsq(X[:, best_terms], ut, rcond=None)[0]
             print("best terms", best_terms)
             print("best loss", best_loss)
             print_pde(xi, self.descr, "u_t")
